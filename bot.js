@@ -67,42 +67,43 @@ client.on('interactionCreate', async interaction => {
 
             let content = Buffer.from(fileData.content, 'base64').toString('utf8');
 
-            // Ищем блок конкретного игрока по точному совпадению username (регистронезависимо)
-            const escapedUsername = username.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-            const userBlockRegex = new RegExp(`(\\{\\s*id:[\\s\\S]*?username:\\s*"${escapedUsername}"[\\s\\S]*?tiers:\\s*\\{)([^\\}]*)(\\}\\s*\\})`, 'i');
-            
-            const match = content.match(userBlockRegex);
+            // Ищем игрока по имени в кавычках
+            const targetStr = `username: "${username}"`;
+            const index = content.indexOf(targetStr);
 
-            if (match) {
-                const prefix = match[1];
-                let tiersContent = match[2];
-                const suffix = match[3];
+            if (index !== -1) {
+                // Игрок найден, ищем закрывающую фигурную скобку его объекта tiers
+                const tiersKeyIndex = content.indexOf('tiers:', index);
+                const openBrace = content.indexOf('{', tiersKeyIndex);
+                const closeBrace = content.indexOf('}', openBrace);
 
-                // Проверяем, есть ли уже этот кит у игрока
-                const kitRegex = new RegExp(`(${kit}\\s*:\\s*"[^"]*")`, 'i');
-
-                if (kitRegex.test(tiersContent)) {
-                    // Если кит есть — заменяем его тир
-                    tiersContent = tiersContent.replace(kitRegex, `${kit}: "${tier}"`);
+                let tiersBlock = content.substring(openBrace + 1, closeBrace);
+                
+                // Проверяем, есть ли уже такой кит
+                const kitKeyRegex = new RegExp(`(${kit}\\s*:)`, 'i');
+                
+                if (kitKeyRegex.test(tiersBlock)) {
+                    // Если кит есть, заменяем его значение
+                    const fullKitRegex = new RegExp(`${kit}\\s*:\\s*"[^"]*"`, 'i');
+                    tiersBlock = tiersBlock.replace(fullKitRegex, `${kit}: "${tier}"`);
                 } else {
-                    // Если кита нет — добавляем в объект tiers
-                    const trimmed = tiersContent.trim();
+                    // Если кита нет, добавляем через запятую
+                    const trimmed = tiersBlock.trim();
                     if (trimmed.length > 0) {
-                        tiersContent = ` ${trimmed}, ${kit}: "${tier}" `;
+                        tiersBlock = ` ${trimmed}, ${kit}: "${tier}" `;
                     } else {
-                        tiersContent = ` ${kit}: "${tier}" `;
+                        tiersBlock = ` ${kit}: "${tier}" `;
                     }
                 }
 
-                const updatedUserBlock = prefix + tiersContent + suffix;
-                content = content.replace(userBlockRegex, updatedUserBlock);
+                content = content.substring(0, openBrace + 1) + tiersBlock + content.substring(closeBrace);
             } else {
-                // Если игрока вообще нет — добавляем нового в конец массива
+                // Если игрока нет вообще, добавляем нового в конец массива
                 const newPlayerEntry = `\n    {\n        id: ${Date.now().toString().slice(-4)},\n        username: "${username}",\n        region: "EU",\n        tiers: { ${kit}: "${tier}" },\n    },`;
                 content = content.replace(/\];\s*$/, `    ${newPlayerEntry}\n];`);
             }
 
-            // Отправляем измененный файл на GitHub
+            // Записываем изменения в репозиторий GitHub
             await octokit.repos.createOrUpdateFileContents({
                 owner,
                 repo,
@@ -112,10 +113,10 @@ client.on('interactionCreate', async interaction => {
                 sha: fileData.sha,
             });
 
-            await interaction.editReply(`Успешно! Игроку **${username}** обновлен кит **${kit}** на **${tier}** (изменения улетели на GitHub).`);
+            await interaction.editReply(`Успешно! Игроку **${username}** обновлен кит **${kit}** на **${tier}**.`);
         } catch (error) {
-            console.error(error);
-            await interaction.editReply('Произошла ошибка при обновлении данных на GitHub.');
+            console.error('Ошибка при работе с GitHub:', error);
+            await interaction.editReply(`Произошла ошибка при обновлении данных на GitHub: ${error.message}`);
         }
     }
 });
