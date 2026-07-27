@@ -67,25 +67,42 @@ client.on('interactionCreate', async interaction => {
 
             let content = Buffer.from(fileData.content, 'base64').toString('utf8');
 
-            const userRegex = new RegExp(`username:\\s*"${username}"[\\s\\S]*?tiers:\\s*\\{([^\\}]*)\\}`, 'i');
-            const match = content.match(userRegex);
+            // Ищем блок конкретного игрока по точному совпадению username (регистронезависимо)
+            const escapedUsername = username.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+            const userBlockRegex = new RegExp(`(\\{\\s*id:[\\s\\S]*?username:\\s*"${escapedUsername}"[\\s\\S]*?tiers:\\s*\\{)([^\\}]*)(\\}\\s*\\})`, 'i');
+            
+            const match = content.match(userBlockRegex);
 
             if (match) {
-                const tiersBlock = match[1];
-                const kitRegex = new RegExp(`${kit}:\\s*"[^"]*"`, 'i');
+                const prefix = match[1];
+                let tiersContent = match[2];
+                const suffix = match[3];
 
-                if (kitRegex.test(tiersBlock)) {
-                    const updatedTiersBlock = tiersBlock.replace(kitRegex, `${kit}: "${tier}"`);
-                    content = content.replace(tiersBlock, updatedTiersBlock);
+                // Проверяем, есть ли уже этот кит у игрока
+                const kitRegex = new RegExp(`(${kit}\\s*:\\s*"[^"]*")`, 'i');
+
+                if (kitRegex.test(tiersContent)) {
+                    // Если кит есть — заменяем его тир
+                    tiersContent = tiersContent.replace(kitRegex, `${kit}: "${tier}"`);
                 } else {
-                    const newTiersBlock = tiersBlock.trim() ? `${tiersBlock}, ${kit}: "${tier}"` : `${kit}: "${tier}"`;
-                    content = content.replace(tiersBlock, ` ${newTiersBlock} `);
+                    // Если кита нет — добавляем в объект tiers
+                    const trimmed = tiersContent.trim();
+                    if (trimmed.length > 0) {
+                        tiersContent = ` ${trimmed}, ${kit}: "${tier}" `;
+                    } else {
+                        tiersContent = ` ${kit}: "${tier}" `;
+                    }
                 }
+
+                const updatedUserBlock = prefix + tiersContent + suffix;
+                content = content.replace(userBlockRegex, updatedUserBlock);
             } else {
-                const newPlayerEntry = `\n    {\n        id: ${Date.now().toString().slice(-4)}, \n        username: "${username}", \n        region: "EU", \n        tiers: { ${kit}: "${tier}" },\n    },`;
+                // Если игрока вообще нет — добавляем нового в конец массива
+                const newPlayerEntry = `\n    {\n        id: ${Date.now().toString().slice(-4)},\n        username: "${username}",\n        region: "EU",\n        tiers: { ${kit}: "${tier}" },\n    },`;
                 content = content.replace(/\];\s*$/, `    ${newPlayerEntry}\n];`);
             }
 
+            // Отправляем измененный файл на GitHub
             await octokit.repos.createOrUpdateFileContents({
                 owner,
                 repo,
@@ -95,7 +112,7 @@ client.on('interactionCreate', async interaction => {
                 sha: fileData.sha,
             });
 
-            await interaction.editReply(`Успешно! Игроку **${username}** обновлен кит **${kit}** на **${tier}**.`);
+            await interaction.editReply(`Успешно! Игроку **${username}** обновлен кит **${kit}** на **${tier}** (изменения улетели на GitHub).`);
         } catch (error) {
             console.error(error);
             await interaction.editReply('Произошла ошибка при обновлении данных на GitHub.');
