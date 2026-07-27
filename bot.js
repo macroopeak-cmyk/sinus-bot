@@ -59,7 +59,6 @@ client.on('interactionCreate', async interaction => {
         const tier = interaction.options.getString('tier').toUpperCase();
 
         try {
-            // 1. Получаем файл с GitHub
             const { data: fileData } = await octokit.repos.getContent({
                 owner,
                 repo,
@@ -68,8 +67,6 @@ client.on('interactionCreate', async interaction => {
 
             let content = Buffer.from(fileData.content, 'base64').toString('utf8');
 
-            // 2. Интеллектуальный поиск игрока в файле и обновление тира
-            // Ищем блок игрока по username
             const userRegex = new RegExp(`username:\\s*"${username}"[\\s\\S]*?tiers:\\s*\\{([^\\}]*)\\}`, 'i');
             const match = content.match(userRegex);
 
@@ -78,21 +75,17 @@ client.on('interactionCreate', async interaction => {
                 const kitRegex = new RegExp(`${kit}:\\s*"[^"]*"`, 'i');
 
                 if (kitRegex.test(tiersBlock)) {
-                    // Если такой кит уже есть у игрока — заменяем тир
                     const updatedTiersBlock = tiersBlock.replace(kitRegex, `${kit}: "${tier}"`);
                     content = content.replace(tiersBlock, updatedTiersBlock);
                 } else {
-                    // Если кита у игрока еще не было — добавляем его в объект tiers
                     const newTiersBlock = tiersBlock.trim() ? `${tiersBlock}, ${kit}: "${tier}"` : `${kit}: "${tier}"`;
                     content = content.replace(tiersBlock, ` ${newTiersBlock} `);
                 }
             } else {
-                // Если игрок вообще отсутствует в массиве INITIAL_PLAYERS — добавляем его в конец
                 const newPlayerEntry = `\n    {\n        id: ${Date.now().toString().slice(-4)}, \n        username: "${username}", \n        region: "EU", \n        tiers: { ${kit}: "${tier}" },\n    },`;
                 content = content.replace(/\];\s*$/, `    ${newPlayerEntry}\n];`);
             }
 
-            // 3. Отправляем обновленный файл обратно на GitHub
             await octokit.repos.createOrUpdateFileContents({
                 owner,
                 repo,
