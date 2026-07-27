@@ -35,16 +35,12 @@ const commands = [
 
 client.once('ready', async () => {
     console.log(`Бот ${client.user.tag} успешно запущен!`);
-
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     try {
-        await rest.put(
-            Routes.applicationCommands(client.user.id),
-            { body: commands },
-        );
-        console.log('Слеш-команды успешно зарегистрированы!');
+        await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+        console.log('Слеш-команды зарегистрированы!');
     } catch (error) {
-        console.error('Ошибка при регистрации команд:', error);
+        console.error('Ошибка команд:', error);
     }
 });
 
@@ -59,7 +55,8 @@ client.on('interactionCreate', async interaction => {
         const tier = interaction.options.getString('tier').toUpperCase();
 
         try {
-            // 1. Получаем актуальный файл и его свежий sha
+            console.log(`Запрос на обновление: игрок ${username}, кит ${kit}, тир ${tier}`);
+            
             const { data: fileData } = await octokit.repos.getContent({
                 owner,
                 repo,
@@ -67,34 +64,30 @@ client.on('interactionCreate', async interaction => {
             });
 
             let content = Buffer.from(fileData.content, 'base64').toString('utf8');
-
-            // 2. Ищем игрока по нику
             const searchUser = `username: "${username}"`;
             const userIndex = content.indexOf(searchUser);
 
             if (userIndex !== -1) {
-                // Игрок найден. Ищем его блок tiers внутри объекта
+                console.log(`Игрок ${username} найден в файле!`);
                 const tiersLabelIndex = content.indexOf('tiers:', userIndex);
                 const bracketStart = content.indexOf('{', tiersLabelIndex);
                 const bracketEnd = content.indexOf('}', bracketStart);
 
                 let tiersSnippet = content.substring(bracketStart + 1, bracketEnd);
-                
-                // Проверяем наличие конкретного кита
                 const kitRegex = new RegExp(`(${kit}\\s*:\\s*"[^"]*")`, 'i');
 
                 if (kitRegex.test(tiersSnippet)) {
-                    // Обновляем существующий кит
+                    console.log(`Кит ${kit} найден у игрока, обновляем...`);
                     tiersSnippet = tiersSnippet.replace(kitRegex, `${kit}: "${tier}"`);
                 } else {
-                    // Добавляем новый кит к существующим
+                    console.log(`Кита ${kit} у игрока не было, добавляем...`);
                     const trimmed = tiersSnippet.trim();
                     tiersSnippet = trimmed ? ` ${trimmed}, ${kit}: "${tier}" ` : ` ${kit}: "${tier}" `;
                 }
 
                 content = content.substring(0, bracketStart + 1) + tiersSnippet + content.substring(bracketEnd);
             } else {
-                // Если игрока нет вообще — добавляем в самый конец массива перед последней квадратной скобкой
+                console.log(`Игрок ${username} не найден, добавляем нового...`);
                 const newEntry = `\n    {\n        id: ${Math.floor(Math.random() * 900 + 100)},\n        username: "${username}",\n        region: "EU",\n        tiers: { ${kit}: "${tier}" },\n    },`;
                 const lastBracket = content.lastIndexOf('];');
                 if (lastBracket !== -1) {
@@ -102,8 +95,9 @@ client.on('interactionCreate', async interaction => {
                 }
             }
 
-            // 3. Отправляем изменения с актуальным sha
-            await octokit.repos.createOrUpdateFileContents({
+            console.hologram ? null : console.log('Отправка коммита на GitHub...');
+            
+            const updateRes = await octokit.repos.createOrUpdateFileContents({
                 owner,
                 repo,
                 path: filePath,
@@ -112,10 +106,11 @@ client.on('interactionCreate', async interaction => {
                 sha: fileData.sha,
             });
 
+            console.log('Коммит успешно создан:', updateRes.data.commit.sha);
             await interaction.editReply(`Успешно! Игроку **${username}** обновлен кит **${kit}** на **${tier}**.`);
         } catch (error) {
-            console.error('Ошибка GitHub API:', error);
-            await interaction.editReply(`Ошибка при обновлении: ${error.message}`);
+            console.error('ОШИБКА ДЕТАЛИ:', error);
+            await interaction.editReply(`Ошибка: ${error.message}`);
         }
     }
 });
