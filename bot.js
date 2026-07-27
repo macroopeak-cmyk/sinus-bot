@@ -15,7 +15,6 @@ const owner = process.env.GITHUB_OWNER;
 const repo = process.env.GITHUB_REPO;
 const filePath = 'lib/tiers-data.ts';
 
-// Определение слеш-команды
 const commands = [
     new SlashCommandBuilder()
         .setName('tier')
@@ -30,17 +29,15 @@ const commands = [
                 .setRequired(true))
         .addStringOption(option =>
             option.setName('tier')
-                .setDescription('Тир (например: HT1, LT2, HT3, LT4)')
+                .setDescription('Тир (например: HT1, LT2, HT3, HT4)')
                 .setRequired(true))
 ].map(command => command.toJSON());
 
 client.once('ready', async () => {
     console.log(`Бот ${client.user.tag} успешно запущен!`);
 
-    // Регистрация команд в Discord
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     try {
-        console.log('Начало регистрации слеш-команд...');
         await rest.put(
             Routes.applicationCommands(client.user.id),
             { body: commands },
@@ -62,33 +59,46 @@ client.on('interactionCreate', async interaction => {
         const tier = interaction.options.getString('tier').toUpperCase();
 
         try {
-            // Получаем файл с GitHub
+            // 1. Получаем файл с GitHub
             const { data: fileData } = await octokit.repos.getContent({
                 owner,
                 repo,
                 path: filePath,
             });
 
-            const content = Buffer.from(fileData.content, 'base64').toString('utf8');
+            let content = Buffer.from(fileData.content, 'base64').toString('utf8');
 
-            // Простая логика поиска игрока и обновления тира внутри INITIAL_PLAYERS
-            // (Ищем строчку с username и обновляем/добавляем объект тиров)
-            let updatedContent = content;
-            
-            // Если игрок уже есть в базе данных
-            if (content.includes(`username: "${username}"`)) {
-                // Здесь бот обновляет поле конкретного кита для найденного игрока
-                // Для надежности выведем уведомление об успешной обработке
-                console.log(`Обновление для ${username}: кит ${kit} -> ${tier}`);
+            // 2. Интеллектуальный поиск игрока в файле и обновление тира
+            // Ищем блок игрока по username
+            const userRegex = new RegExp(`username:\\s*"${username}"[\\s\\S]*?tiers:\\s*\\{([^\\}]*)\\}`, 'i');
+            const match = content.match(userRegex);
+
+            if (match) {
+                const tiersBlock = match[1];
+                const kitRegex = new RegExp(`${kit}:\\s*"[^"]*"`, 'i');
+
+                if (kitRegex.test(tiersBlock)) {
+                    // Если такой кит уже есть у игрока — заменяем тир
+                    const updatedTiersBlock = tiersBlock.replace(kitRegex, `${kit}: "${tier}"`);
+                    content = content.replace(tiersBlock, updatedTiersBlock);
+                } else {
+                    // Если кита у игрока еще не было — добавляем его в объект tiers
+                    const newTiersBlock = tiersBlock.trim() ? `${tiersBlock}, ${kit}: "${tier}"` : `${kit}: "${tier}"`;
+                    content = content.replace(tiersBlock, ` ${newTiersBlock} `);
+                }
+            } else {
+                // Если игрок вообще отсутствует в массиве INITIAL_PLAYERS — добавляем его в конец
+                const newPlayerEntry = `\n    {\n        id: ${Date.now().toString().slice(-4)}, \n        username: "${username}", \n        region: "EU", \n        tiers: { ${kit}: "${tier}" },\n    },`;
+                content = content.replace(/\];\s*$/, `    ${newPlayerEntry}\n];`);
             }
 
-            // Сохраняем изменения обратно в репозиторий GitHub
+            // 3. Отправляем обновленный файл обратно на GitHub
             await octokit.repos.createOrUpdateFileContents({
                 owner,
                 repo,
                 path: filePath,
-                message: `Update tier for ${username} via Discord bot`,
-                content: Buffer.from(updatedContent).toString('base64'),
+                message: `Update tier for ${username} (${kit}: ${tier}) via Discord bot`,
+                content: Buffer.from(content).toString('base64'),
                 sha: fileData.sha,
             });
 
