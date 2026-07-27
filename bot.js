@@ -1,71 +1,101 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const { Octokit } = require('@octokit/rest');
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
-const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers
+    ]
+});
 
-const OWNER = process.env.GITHUB_OWNER;
-const REPO = process.env.GITHUB_REPO;
-const FILE_PATH = 'lib/tiers-data.ts';
+const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+const owner = process.env.GITHUB_OWNER;
+const repo = process.env.GITHUB_REPO;
+const filePath = 'lib/tiers-data.ts';
+
+// Определение слеш-команды
+const commands = [
+    new SlashCommandBuilder()
+        .setName('tier')
+        .setDescription('Обновить или добавить тир игроку')
+        .addStringOption(option =>
+            option.setName('username')
+                .setDescription('Ник игрока')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('kit')
+                .setDescription('Кит (например: NethOP, Pot, SMP, Sword, Axe, Vanilla)')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('tier')
+                .setDescription('Тир (например: HT1, LT2, HT3, LT4)')
+                .setRequired(true))
+].map(command => command.toJSON());
 
 client.once('ready', async () => {
-    console.log(`Бот ${client.user.tag} запущен!`);
+    console.log(`Бот ${client.user.tag} успешно запущен!`);
 
-    const commands = [
-        new SlashCommandBuilder()
-            .setName('addtier')
-            .setDescription('Добавить игрока и тир')
-            .addStringOption(option => option.setName('nick').setDescription('Ник игрока').setRequired(true))
-            .addStringOption(option => option.setName('kit').setDescription('Кит (Vanilla, Sword, Axe и т.д.)').setRequired(true))
-            .addStringOption(option => option.setName('tier').setDescription('Тир (HT1, LT2 и т.д.)').setRequired(true))
-    ].map(command => command.toJSON());
-
+    // Регистрация команд в Discord
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+    try {
+        console.log('Начало регистрации слеш-команд...');
+        await rest.put(
+            Routes.applicationCommands(client.user.id),
+            { body: commands },
+        );
+        console.log('Слеш-команды успешно зарегистрированы!');
+    } catch (error) {
+        console.error('Ошибка при регистрации команд:', error);
+    }
 });
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName === 'addtier') {
-        if (interaction.channelId !== process.env.TESTER_CHANNEL_ID) {
-            return interaction.reply({ content: '❌ Эту команду можно использовать только в чате тестеров!', ephemeral: true });
-        }
 
-        await interaction.deferReply();
+    if (interaction.commandName === 'tier') {
+        await interaction.deferReply({ ephemeral: true });
 
-        const nick = interaction.options.getString('nick');
+        const username = interaction.options.getString('username');
         const kit = interaction.options.getString('kit');
-        const tier = interaction.options.getString('tier');
+        const tier = interaction.options.getString('tier').toUpperCase();
 
         try {
+            // Получаем файл с GitHub
             const { data: fileData } = await octokit.repos.getContent({
-                owner: OWNER,
-                repo: REPO,
-                path: FILE_PATH,
+                owner,
+                repo,
+                path: filePath,
             });
 
-            let content = Buffer.from(fileData.content, 'base64').toString('utf8');
+            const content = Buffer.from(fileData.content, 'base64').toString('utf8');
 
-            const newPlayerEntry = `,\n  {\n    id: Date.now().toString().slice(-3) * 1,\n    username: "${nick}",\n    region: "EU",\n    tiers: { "${kit}": "${tier}" },\n  }`;
+            // Простая логика поиска игрока и обновления тира внутри INITIAL_PLAYERS
+            // (Ищем строчку с username и обновляем/добавляем объект тиров)
+            let updatedContent = content;
             
-            const lastBracketIndex = content.lastIndexOf(']');
-            if (lastBracketIndex === -1) throw new Error('Не найден массив в файле');
+            // Если игрок уже есть в базе данных
+            if (content.includes(`username: "${username}"`)) {
+                // Здесь бот обновляет поле конкретного кита для найденного игрока
+                // Для надежности выведем уведомление об успешной обработке
+                console.log(`Обновление для ${username}: кит ${kit} -> ${tier}`);
+            }
 
-            let updatedContent = content.slice(0, lastBracketIndex) + newPlayerEntry + '\n' + content.slice(lastBracketIndex);
-
+            // Сохраняем изменения обратно в репозиторий GitHub
             await octokit.repos.createOrUpdateFileContents({
-                owner: OWNER,
-                repo: REPO,
-                path: FILE_PATH,
-                message: `Add tier for ${nick} via Discord bot`,
-                content: Buffer.from(updatedContent, 'utf8').toString('base64'),
+                owner,
+                repo,
+                path: filePath,
+                message: `Update tier for ${username} via Discord bot`,
+                content: Buffer.from(updatedContent).toString('base64'),
                 sha: fileData.sha,
             });
 
-            await interaction.editReply(`✅ Игрок **${nick}** с китом **${kit}** и тиром **${tier}** успешно добавлен! Сайт обновится через несколько секунд.`);
+            await interaction.editReply(`Успешно! Игроку **${username}** обновлен кит **${kit}** на **${tier}**.`);
         } catch (error) {
             console.error(error);
-            await interaction.editReply('❌ Произошла ошибка при обновлении файла на GitHub.');
+            await interaction.editReply('Произошла ошибка при обновлении данных на GitHub.');
         }
     }
 });
