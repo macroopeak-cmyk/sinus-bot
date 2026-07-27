@@ -59,6 +59,7 @@ client.on('interactionCreate', async interaction => {
         const tier = interaction.options.getString('tier').toUpperCase();
 
         try {
+            // 1. Получаем актуальный файл и его свежий sha
             const { data: fileData } = await octokit.repos.getContent({
                 owner,
                 repo,
@@ -67,56 +68,54 @@ client.on('interactionCreate', async interaction => {
 
             let content = Buffer.from(fileData.content, 'base64').toString('utf8');
 
-            // Ищем игрока по имени в кавычках
-            const targetStr = `username: "${username}"`;
-            const index = content.indexOf(targetStr);
+            // 2. Ищем игрока по нику
+            const searchUser = `username: "${username}"`;
+            const userIndex = content.indexOf(searchUser);
 
-            if (index !== -1) {
-                // Игрок найден, ищем закрывающую фигурную скобку его объекта tiers
-                const tiersKeyIndex = content.indexOf('tiers:', index);
-                const openBrace = content.indexOf('{', tiersKeyIndex);
-                const closeBrace = content.indexOf('}', openBrace);
+            if (userIndex !== -1) {
+                // Игрок найден. Ищем его блок tiers внутри объекта
+                const tiersLabelIndex = content.indexOf('tiers:', userIndex);
+                const bracketStart = content.indexOf('{', tiersLabelIndex);
+                const bracketEnd = content.indexOf('}', bracketStart);
 
-                let tiersBlock = content.substring(openBrace + 1, closeBrace);
+                let tiersSnippet = content.substring(bracketStart + 1, bracketEnd);
                 
-                // Проверяем, есть ли уже такой кит
-                const kitKeyRegex = new RegExp(`(${kit}\\s*:)`, 'i');
-                
-                if (kitKeyRegex.test(tiersBlock)) {
-                    // Если кит есть, заменяем его значение
-                    const fullKitRegex = new RegExp(`${kit}\\s*:\\s*"[^"]*"`, 'i');
-                    tiersBlock = tiersBlock.replace(fullKitRegex, `${kit}: "${tier}"`);
+                // Проверяем наличие конкретного кита
+                const kitRegex = new RegExp(`(${kit}\\s*:\\s*"[^"]*")`, 'i');
+
+                if (kitRegex.test(tiersSnippet)) {
+                    // Обновляем существующий кит
+                    tiersSnippet = tiersSnippet.replace(kitRegex, `${kit}: "${tier}"`);
                 } else {
-                    // Если кита нет, добавляем через запятую
-                    const trimmed = tiersBlock.trim();
-                    if (trimmed.length > 0) {
-                        tiersBlock = ` ${trimmed}, ${kit}: "${tier}" `;
-                    } else {
-                        tiersBlock = ` ${kit}: "${tier}" `;
-                    }
+                    // Добавляем новый кит к существующим
+                    const trimmed = tiersSnippet.trim();
+                    tiersSnippet = trimmed ? ` ${trimmed}, ${kit}: "${tier}" ` : ` ${kit}: "${tier}" `;
                 }
 
-                content = content.substring(0, openBrace + 1) + tiersBlock + content.substring(closeBrace);
+                content = content.substring(0, bracketStart + 1) + tiersSnippet + content.substring(bracketEnd);
             } else {
-                // Если игрока нет вообще, добавляем нового в конец массива
-                const newPlayerEntry = `\n    {\n        id: ${Date.now().toString().slice(-4)},\n        username: "${username}",\n        region: "EU",\n        tiers: { ${kit}: "${tier}" },\n    },`;
-                content = content.replace(/\];\s*$/, `    ${newPlayerEntry}\n];`);
+                // Если игрока нет вообще — добавляем в самый конец массива перед последней квадратной скобкой
+                const newEntry = `\n    {\n        id: ${Math.floor(Math.random() * 900 + 100)},\n        username: "${username}",\n        region: "EU",\n        tiers: { ${kit}: "${tier}" },\n    },`;
+                const lastBracket = content.lastIndexOf('];');
+                if (lastBracket !== -1) {
+                    content = content.substring(0, lastBracket) + newEntry + '\n];';
+                }
             }
 
-            // Записываем изменения в репозиторий GitHub
+            // 3. Отправляем изменения с актуальным sha
             await octokit.repos.createOrUpdateFileContents({
                 owner,
                 repo,
                 path: filePath,
-                message: `Update tier for ${username} (${kit}: ${tier}) via Discord bot`,
+                message: `Update ${username} (${kit}: ${tier}) via bot`,
                 content: Buffer.from(content).toString('base64'),
                 sha: fileData.sha,
             });
 
             await interaction.editReply(`Успешно! Игроку **${username}** обновлен кит **${kit}** на **${tier}**.`);
         } catch (error) {
-            console.error('Ошибка при работе с GitHub:', error);
-            await interaction.editReply(`Произошла ошибка при обновлении данных на GitHub: ${error.message}`);
+            console.error('Ошибка GitHub API:', error);
+            await interaction.editReply(`Ошибка при обновлении: ${error.message}`);
         }
     }
 });
